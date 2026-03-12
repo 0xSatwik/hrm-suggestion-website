@@ -394,7 +394,7 @@ function ReadingModeMCQ() {
           </div>
         </div>
 
-        <Card className="sticky top-20 z-20 mb-6 border bg-background/95 backdrop-blur">
+        <Card className="mb-6 border bg-background">
           <CardContent className="p-4">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div className="space-y-3">
