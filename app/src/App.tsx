@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ThemeProvider, useTheme } from './hooks/useTheme';
 import { finalSuggestionMCQs } from './data/finalSuggestionMCQs';
 import { classNotesMCQs } from './data/classNotesMCQs';
@@ -38,6 +38,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 // Types
 type Page = 'home' | 'reading-mcq' | 'test-mcq' | 'summary' | 'analytics';
 type PDFType = 'final' | 'notes';
+
+const READING_BATCH_SIZE = 12;
 
 // Navigation Component
 function Navigation({ 
@@ -311,53 +313,75 @@ function HomePage({ setPage }: { setPage: (page: Page) => void }) {
 // Reading Mode MCQ Component
 function ReadingModeMCQ() {
   const [selectedPDF, setSelectedPDF] = useState<PDFType>('final');
-  const [currentQuestion, setCurrentQuestion] = useState(0);
-  const [revealedAnswers, setRevealedAnswers] = useState<Set<number>>(new Set());
+  const [revealedAnswers, setRevealedAnswers] = useState<Map<number, Set<number>>>(new Map());
   const [showAllAnswers, setShowAllAnswers] = useState(false);
+  const [visibleCount, setVisibleCount] = useState(READING_BATCH_SIZE);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
 
   const mcqs = selectedPDF === 'final' ? finalSuggestionMCQs : classNotesMCQs;
-  const currentMCQ = mcqs[currentQuestion];
+  const visibleMCQs = mcqs.slice(0, visibleCount);
+  const hasMoreQuestions = visibleCount < mcqs.length;
+  const loadingProgress = Math.min((visibleCount / mcqs.length) * 100, 100);
 
-  const toggleReveal = (index: number) => {
-    const newRevealed = new Set(revealedAnswers);
-    if (newRevealed.has(index)) {
-      newRevealed.delete(index);
-    } else {
-      newRevealed.add(index);
+  useEffect(() => {
+    const trigger = loadMoreRef.current;
+
+    if (!trigger || !hasMoreQuestions) {
+      return;
     }
-    setRevealedAnswers(newRevealed);
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((previous) => Math.min(previous + READING_BATCH_SIZE, mcqs.length));
+        }
+      },
+      { rootMargin: '240px 0px' }
+    );
+
+    observer.observe(trigger);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [hasMoreQuestions, mcqs.length]);
+
+  const resetReadingMode = (pdfType: PDFType) => {
+    setSelectedPDF(pdfType);
+    setVisibleCount(READING_BATCH_SIZE);
+    setRevealedAnswers(new Map());
+    setShowAllAnswers(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const toggleReveal = (questionIndex: number, optionIndex: number) => {
+    setRevealedAnswers((previous) => {
+      const next = new Map(previous);
+      const currentQuestionAnswers = new Set(next.get(questionIndex) ?? []);
+
+      if (currentQuestionAnswers.has(optionIndex)) {
+        currentQuestionAnswers.delete(optionIndex);
+      } else {
+        currentQuestionAnswers.add(optionIndex);
+      }
+
+      if (currentQuestionAnswers.size === 0) {
+        next.delete(questionIndex);
+      } else {
+        next.set(questionIndex, currentQuestionAnswers);
+      }
+
+      return next;
+    });
   };
 
   const revealAll = () => {
     setShowAllAnswers(true);
-    setRevealedAnswers(new Set([0, 1, 2, 3]));
   };
 
   const hideAll = () => {
     setShowAllAnswers(false);
-    setRevealedAnswers(new Set());
-  };
-
-  const nextQuestion = () => {
-    if (currentQuestion < mcqs.length - 1) {
-      setCurrentQuestion(prev => prev + 1);
-      setRevealedAnswers(new Set());
-      setShowAllAnswers(false);
-    }
-  };
-
-  const prevQuestion = () => {
-    if (currentQuestion > 0) {
-      setCurrentQuestion(prev => prev - 1);
-      setRevealedAnswers(new Set());
-      setShowAllAnswers(false);
-    }
-  };
-
-  const goToQuestion = (index: number) => {
-    setCurrentQuestion(index);
-    setRevealedAnswers(new Set());
-    setShowAllAnswers(false);
+    setRevealedAnswers(new Map());
   };
 
   return (
@@ -366,149 +390,146 @@ function ReadingModeMCQ() {
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
           <div>
             <h1 className="text-2xl font-bold">Reading Mode MCQs</h1>
-            <p className="text-muted-foreground">Click on options to reveal answers</p>
-          </div>
-          <div className="flex items-center gap-4">
-            <Select value={selectedPDF} onValueChange={(v: PDFType) => {
-              setSelectedPDF(v);
-              setCurrentQuestion(0);
-              setRevealedAnswers(new Set());
-            }}>
-              <SelectTrigger className="w-[200px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="final">Final Suggestion PDF</SelectItem>
-                <SelectItem value="notes">Class Notes PDF</SelectItem>
-              </SelectContent>
-            </Select>
+            <p className="text-muted-foreground">Scroll continuously through the question bank and reveal answers as needed</p>
           </div>
         </div>
 
-        <Card className="mb-6">
-          <CardContent className="p-6">
-            <div className="flex items-center justify-between mb-4">
-              <Badge variant="outline">Question {currentQuestion + 1} of {mcqs.length}</Badge>
-              <Badge variant="secondary">{currentMCQ.topic}</Badge>
-            </div>
-
-            <Progress value={(currentQuestion + 1) / mcqs.length * 100} className="mb-6" />
-
-            <h2 className="text-xl font-medium mb-6">{currentMCQ.question}</h2>
-
-            <div className="space-y-3">
-              {currentMCQ.options.map((option, index) => {
-                const isRevealed = revealedAnswers.has(index);
-                const isCorrect = index === currentMCQ.correctAnswer;
-                
-                return (
-                  <motion.button
-                    key={index}
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    onClick={() => toggleReveal(index)}
-                    className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
-                      isRevealed
-                        ? isCorrect
-                          ? 'border-green-500 bg-green-50 dark:bg-green-950/20'
-                          : 'border-red-500 bg-red-50 dark:bg-red-950/20'
-                        : 'border-border hover:border-primary'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
-                        isRevealed
-                          ? isCorrect
-                            ? 'bg-green-500 text-white'
-                            : 'bg-red-500 text-white'
-                          : 'bg-muted'
-                      }`}>
-                        {String.fromCharCode(65 + index)}
-                      </div>
-                      <span className="flex-1">{option}</span>
-                      {isRevealed && (
-                        isCorrect ? (
-                          <CheckCircle className="h-5 w-5 text-green-500" />
-                        ) : (
-                          <XCircle className="h-5 w-5 text-red-500" />
-                        )
-                      )}
-                    </div>
-                  </motion.button>
-                );
-              })}
-            </div>
-
-            {(showAllAnswers || revealedAnswers.has(currentMCQ.correctAnswer)) && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: 'auto' }}
-                className="mt-6 p-4 bg-blue-50 dark:bg-blue-950/20 rounded-lg"
-              >
-                <div className="flex items-start gap-2">
-                  <Lightbulb className="h-5 w-5 text-blue-500 mt-0.5" />
-                  <div>
-                    <h4 className="font-medium text-blue-900 dark:text-blue-100">Explanation</h4>
-                    <p className="text-blue-800 dark:text-blue-200 mt-1">{currentMCQ.explanation}</p>
-                  </div>
+        <Card className="sticky top-20 z-20 mb-6 border bg-background/95 backdrop-blur">
+          <CardContent className="p-4">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">Showing {visibleMCQs.length} of {mcqs.length} questions</Badge>
+                  <Badge variant="secondary">
+                    {showAllAnswers ? 'All visible answers revealed' : 'Tap any option to reveal it'}
+                  </Badge>
                 </div>
-              </motion.div>
-            )}
-          </CardContent>
-        </Card>
+                <Progress value={loadingProgress} className="w-full max-w-md" />
+              </div>
 
-        {/* Controls */}
-        <div className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={prevQuestion}
-              disabled={currentQuestion === 0}
-            >
-              Previous
-            </Button>
-            <Button
-              variant="outline"
-              onClick={nextQuestion}
-              disabled={currentQuestion === mcqs.length - 1}
-            >
-              Next
-            </Button>
-          </div>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                <Select value={selectedPDF} onValueChange={(value: PDFType) => resetReadingMode(value)}>
+                  <SelectTrigger className="w-full sm:w-[220px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="final">Final Suggestion PDF</SelectItem>
+                    <SelectItem value="notes">Class Notes PDF</SelectItem>
+                  </SelectContent>
+                </Select>
 
-          <div className="flex items-center gap-2">
-            <Button
-              variant={showAllAnswers ? 'secondary' : 'outline'}
-              onClick={showAllAnswers ? hideAll : revealAll}
-            >
-              {showAllAnswers ? 'Hide Answers' : 'Reveal All'}
-            </Button>
-          </div>
-        </div>
-
-        {/* Question Navigator */}
-        <Card className="mt-6">
-          <CardHeader>
-            <CardTitle className="text-sm">Quick Navigator</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-2">
-              {mcqs.map((_, index) => (
-                <button
-                  key={index}
-                  onClick={() => goToQuestion(index)}
-                  className={`w-8 h-8 rounded text-sm font-medium transition-colors ${
-                    index === currentQuestion
-                      ? 'bg-primary text-primary-foreground'
-                      : 'bg-muted hover:bg-muted-foreground/20'
-                  }`}
+                <Button
+                  variant={showAllAnswers ? 'secondary' : 'default'}
+                  onClick={showAllAnswers ? hideAll : revealAll}
+                  className="sm:min-w-[170px]"
                 >
-                  {index + 1}
-                </button>
-              ))}
+                  {showAllAnswers ? 'Hide All Answers' : 'Reveal All Answers'}
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
+
+        <div className="space-y-6">
+          {visibleMCQs.map((mcq, questionIndex) => {
+            const questionAnswers = revealedAnswers.get(questionIndex) ?? new Set<number>();
+            const explanationVisible = showAllAnswers || questionAnswers.has(mcq.correctAnswer);
+
+            return (
+              <motion.div
+                key={`${selectedPDF}-${mcq.id}-${questionIndex}`}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.2 }}
+              >
+                <Card>
+                  <CardContent className="p-6">
+                    <div className="flex flex-col gap-3 mb-6 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="outline">Question {questionIndex + 1}</Badge>
+                        <Badge variant="secondary">{mcq.topic}</Badge>
+                      </div>
+                      <span className="text-sm text-muted-foreground">
+                        {questionAnswers.size > 0 || showAllAnswers ? 'Answer visible' : 'Answer hidden'}
+                      </span>
+                    </div>
+
+                    <h2 className="text-xl font-medium mb-6">{mcq.question}</h2>
+
+                    <div className="space-y-3">
+                      {mcq.options.map((option, optionIndex) => {
+                        const isRevealed = showAllAnswers || questionAnswers.has(optionIndex);
+                        const isCorrect = optionIndex === mcq.correctAnswer;
+
+                        return (
+                          <button
+                            key={optionIndex}
+                            onClick={() => toggleReveal(questionIndex, optionIndex)}
+                            className={`w-full text-left p-4 rounded-lg border-2 transition-all ${
+                              isRevealed
+                                ? isCorrect
+                                  ? 'border-green-500 bg-green-50 dark:bg-green-950/20'
+                                  : 'border-red-500 bg-red-50 dark:bg-red-950/20'
+                                : 'border-border hover:border-primary'
+                            }`}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium ${
+                                isRevealed
+                                  ? isCorrect
+                                    ? 'bg-green-500 text-white'
+                                    : 'bg-red-500 text-white'
+                                  : 'bg-muted'
+                              }`}>
+                                {String.fromCharCode(65 + optionIndex)}
+                              </div>
+                              <span className="flex-1">{option}</span>
+                              {isRevealed && (
+                                isCorrect ? (
+                                  <CheckCircle className="h-5 w-5 text-green-500" />
+                                ) : (
+                                  <XCircle className="h-5 w-5 text-red-500" />
+                                )
+                              )}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {explanationVisible && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        className="mt-6 rounded-lg bg-blue-50 p-4 dark:bg-blue-950/20"
+                      >
+                        <div className="flex items-start gap-2">
+                          <Lightbulb className="h-5 w-5 text-blue-500 mt-0.5" />
+                          <div>
+                            <h4 className="font-medium text-blue-900 dark:text-blue-100">Explanation</h4>
+                            <p className="mt-1 text-blue-800 dark:text-blue-200">{mcq.explanation}</p>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </CardContent>
+                </Card>
+              </motion.div>
+            );
+          })}
+        </div>
+
+        <div ref={loadMoreRef} className="py-8">
+          {hasMoreQuestions ? (
+            <div className="flex items-center justify-center">
+              <Badge variant="outline">Scroll down to load more questions</Badge>
+            </div>
+          ) : (
+            <div className="text-center text-sm text-muted-foreground">
+              You have reached the end of this question bank.
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
